@@ -7,6 +7,10 @@ IMAGENET_STANDARD_MEAN = [0.5, 0.5, 0.5]
 IMAGENET_STANDARD_STD = [0.5, 0.5, 0.5]
 
 
+def add_image_tokens_to_prompt(prefix_prompt, bos_token, image_seq_length, image_token):
+    return f"{image_token * image_seq_length}{bos_token}{prefix_prompt}\n"
+
+
 def resize(
     image: Image.Image,
     size=Tuple[int, int],
@@ -125,4 +129,4 @@ class PaliGemmaProcessor:
             truncation=truncation,
         )
 
-        return inputs
+        return {"pixel_values": pixel_values, **inputs}

@@ -1,7 +1,8 @@
+from numpy import repeat
 import torch
 from torch import nn
 from typing import Optional, Sequence, Tuple, List
-from torch.nn import CrossEntropyLoss
+from torch.nn import CrossEntropyLoss, attention
 from modeling_siglip import SiglipVisionConfig, SiglipVisionModel
 import math
 
@@ -105,6 +106,14 @@ class GemmaMLP(nn.Module):
     def forward(self, x):
         return self.down_proj(nn.functional.gelu(self.gate_proj(x),approximate='tanh') * self.up_proj(x))
 
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    batch, num_key_value_heads, seq_len, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:,:,None,:,:].expand(batch,num_key_value_heads,n_rep,seq_len,head_dim)
+    return hidden_states.reshape(batch,num_key_value_heads * n_rep,seq_len,head_dim)
+
+
 class GemmaAttention(nn.Module):
 
     def __init__(self, config: GemmaConfig, layer_idx: Optional[int] = None):
@@ -141,20 +150,28 @@ class GemmaAttention(nn.Module):
                 kv_cache: Optional[KVCache] = None,
         ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
             batch_size, q_len, _ = hidden_states.size()
-            w_q = self.q_proj(hidden_states)
-            w_k = self.k_proj(hidden_states)
-            w_v = self.v_proj(hidden_states)
+            q = self.q_proj(hidden_states)
+            k = self.k_proj(hidden_states)
+            v = self.v_proj(hidden_states)
 
-            w_q = w_q.view(batch_size,q_len,self.num_heads,self.head_dim).transpose(1,2)
-            w_k = w_k.view(batch_size,q_len,self.num_key_value_heads,self.head_dim).transpose(1,2)
-            w_v = w_v.view(batch_size,q_len,self.num_key_value_heads,self.head_dim).transpose(1,2)
-            cos, sin = self.rotary_emb(w_v,position_ids,seq_len=None)
+            q = q.view(batch_size,q_len,self.num_heads,self.head_dim).transpose(1,2)
+            k = k.view(batch_size,q_len,self.num_key_value_heads,self.head_dim).transpose(1,2)
+            v = v.view(batch_size,q_len,self.num_key_value_heads,self.head_dim).transpose(1,2)
+            cos, sin = self.rotary_emb(v,position_ids,seq_len=None)
             
-            w_q, w_k = apply_rotary_pos_emb(w_q,w_k,cos,sin)
+            q, k = apply_rotary_pos_emb(q,k,cos,sin)
 
             if kv_cache is not None:
-                w_k,w_v = kv_cache.update(w_k,w_v,self.layer_idx)
+                k,v = kv_cache.update(k,v,self.layer_idx)
 
+            k = repeat_kv(k, self.num_key_value_groups)
+            v = repeat_kv(v, self.num_key_value_groups)
+
+            attn_weights = torch.matmul(q,k.transpose(2,3)) / math.sqrt(self.head_dim)
+
+            attn_weights = attn_weights + attention_mask
+
+            return attn_weights
 
 
 class GemmaDecoderLayer(nn.Module):

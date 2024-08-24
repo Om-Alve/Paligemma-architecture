@@ -33,7 +33,7 @@ def inference(
     top_p: float,
     do_sample: bool,
 ) -> str:
-    model_inputs = get_model_inputs(prompt, image_file_path, device)
+    model_inputs = get_model_inputs(processor, prompt, image_file_path, device)
     input_ids = model_inputs["input_ids"]
     attention_mask = model_inputs["attention_mask"]
     pixel_values = model_inputs["pixel_values"]
@@ -68,21 +68,21 @@ def inference(
         attention_mask = torch.cat(
             [attention_mask, torch.ones((1, 1), device=input_ids.device)], dim=-1
         )
-    generated_tokens = torch.cat([generated_tokens], dim=-1)
+    generated_tokens = torch.cat(generated_tokens, dim=-1)
     decoded = processor.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
     print(prompt + decoded)
 
 
 def _sample_top_p(probs: torch.Tensor, p: float):
-    probs_sort, probs_idx = torch.sort(probs, dim=-1, decending=True)
+    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
     probs_sum = torch.cumsum(probs_sort, dim=-1)
 
-    mask = probs_sum > p
+    mask = probs_sum - probs_sort > p
 
     probs_sort[mask] = 0.0
 
-    probs_sort.div_(prob_sort.sum(dim=-1, keepdim=True))
+    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
 
     next_token = torch.multinomial(probs_sort, num_samples=1)
 
@@ -93,7 +93,7 @@ def _sample_top_p(probs: torch.Tensor, p: float):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_path = ""
+    model_path = "../paligemma-3b-pt-224"
     print(f"Loading model")
     model, tokenizer = load_hf_model(model_path, device)
     model = model.to(device).eval()
@@ -102,9 +102,9 @@ if __name__ == "__main__":
     image_size = model.config.vision_config.image_size
     processor = PaliGemmaProcessor(tokenizer, num_image_tokens, image_size)
 
-    prompt = "Describe this image"
+    prompt = "Which characters are present in this image? "
 
-    image_path = ""
+    image_path = "../minnie.jpg"
 
     max_new_tokens = 256
 
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     temperature = 1.0
 
-    do_sample = False
+    do_sample = True
 
     print("Model Loaded!")
 
